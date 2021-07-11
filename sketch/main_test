@@ -1,0 +1,48 @@
+Test_HavePipeline {
+  case 1: Good {
+    - make test servers to respond to [
+      {
+        HANDSHAKE:
+          send back HANDSHAKE in 2 seconds
+        REQUEST:
+          send back piece in 2 seconds
+      },
+      {
+        HANDSHAKE:
+          send back HANDSHAKE in 4 seconds
+        REQUEST:
+          send back piece in 4 seconds
+      },
+    ],
+    - metainfo = metainfo with {
+      - torrent that has two pieces
+    }
+    - peers = test server peers from above
+  }
+
+  do {
+    connectWithAllPeers(metainfo, peer, directory)
+    check if directory contains expected REQUEST files in proper order
+  }
+}
+
+
+
+The main thing to test here is:
+  * Make a []list of pieces
+  * Receive a bunch of HAVE requests (each async)
+  * For each HAVE request
+    * fire a REQUEST msg
+    * start a misfire channel
+    * if we get something back, good
+    * If not, the misfire channel will get something back through a timer func
+  * misfire function
+    * reset DOWNLOADING state for that total[pieceIdx][blockIdx]
+    * retry firing REQUEST msg
+  * PIECE msg
+    * turn off misfire request
+    * set total[pieceIdx][blockIdx] to DONE state
+    * fire next REQUEST msg
+
+One HAVE request
+  * One 

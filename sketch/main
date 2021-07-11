@@ -1,0 +1,236 @@
+// Basically a simple GET request
+send_through_http() { }
+parse_bencode() { }
+format_as_url() { }
+
+enum AnnounceUrlTypes{
+  EXT_HTTP,
+  EXT_UDP,
+  EXT_DHT,
+}
+typedef AnnounceUrl struct {
+  url string
+  type int
+}
+// Extract the announce and annouce_list urls
+get_announce_urls(parsed_torrent_file: AnnounceUrl) {
+}
+
+get_peers(parsed_torrent_file) {
+  announce_urls, err = get_announce_urls(parsed_torrent_file)
+  die if err
+
+  found_usable_url = false
+  for each announce_urls {
+    // Handle HTTP only for now
+    if announce_url.type != EXT_HTTP {
+      continue
+    }
+    found_usable_url = true
+    // TODO: what is data?
+    resp, err = send_through_http(announce_url.url, data)
+    report and continue if err
+    // If we failed, just use the next one
+  }
+  die(err) if err
+  die("No usable URL found") if !found_usable_url
+  peers, err = get_peers_from_http_announce_url_resp()
+  die if err
+
+  print(peers)
+}
+
+establish_conn(peer) {
+  conn = dial(peer)
+  return conn
+}
+
+type PeerHandshake struct {
+  ...
+}
+build_peer_handshake(torrent_metainfo) PeerHandshake {
+  ...
+}
+
+go send_peer_handshake(conn) {
+  handshake = build_peer_handshake()
+  conn.send(handshake)
+}
+
+go handleMsg(conn, peerId, peerMsg, errChan) {
+  switch {
+    case peerMsg == KEEP_ALIVE:
+      panic(todo)
+    case peerMsg == UNCHOKED:
+      // We're expecting this as a response to our INTERESTED msg
+      // We shouldn't do anything here
+    case peerMsg == HANDSHAKE:
+      // We're expecting this after we send a successful handshake msg with
+      // a peer at first connection
+      // Send an INTERESTED msg
+    case peerMsg == HAVE:
+      // After peer sends an UNCHOKED msg, they should send us a HAVE msg
+      // with the pieces they have
+      err = handleHaveMsg(peerMsg, conn, peer_id, peerJobQueue, totalPiecesMap)
+    case peerMsg == PIECE:
+      // This will come as a response to a REQUEST msg we made: put the piece
+      // somewhere in the filesystem
+      err = handlePieceMsg(peerMsg, conn, peer_id, peerJobQueue, totalPiecesMap)
+  }
+  die in errChan if err
+}
+
+// handleHaveMsg checks if this peer needs to even bother with this piece.
+// If not, drop it
+// If yes, queue it
+handleHaveMsg(peerMsg, conn, peer_id, peerJobQueue, totalPiecesMap) error {
+  pieceIdx = getPieceIdxFromMsg(peerMsg)
+  // if !totalPiecesMap.Need(pieceIdx) {
+  //   ignore
+  // }
+  peerJobQueue.push(pieceIdx)
+  // We can also do this with a doOnce
+  if peerJobQueue.size == 1 {
+    requestPieceFromPeer(conn, peer_id, peerJobQueue, totalPiecesMap)
+  }
+}
+
+// requestPieceFromPeer builds a REQUEST msg to conn and updates totalPiecesMap
+// that it is working with this piece
+// XXX This loop will always run once, since:
+// - We're running it once only when totalPiecesQueue == 1
+requestPieceFromPeer(conn, peer_id, peerJobQueue, totalPiecesMap) error {
+  // This will be more complicated depending on the design of the totalPiecesMap.
+  // I'm thinking of having a function that activates a mutex, where it'll ask
+  // if the piece is downloaded or not. If not, set DOWNLOADING. If yes, return
+  // it is not available
+  while (!peerJobQueue.Empty()) {
+    ok := totalPiecesMap.AttemptToDownload(peerJobQueue.peek(0))
+    if !ok {
+      peerJobQueue.pop()
+      // So that we always do "something"
+      // TODO: because of this, we'll need to have requestPieceFromPeer be async
+      continue
+    }
+    err = conn.Send(buildRequestMessage(peerJobQueue[0]))
+    if err {
+      remove pieces from totalPiecesMap
+      die
+    }
+  }
+}
+
+// handlePieceMsg does two things:
+// - Marks totalPiecesMap[pieceIdx] as DONE
+// - Copies a piece from peerMsg to the filesystem
+// - Requests the next piece from the peer
+handlePieceMsg(peerMsg, conn, peer_id, peerJobQueue, totalPiecesMap) error {
+  totalPiecesMap.MarkAsDone(peerMsg.pieceIdx)
+  copy peerMsg.pieceBytes to file system
+
+  go requestPieceFromPeer(conn, peer_id, peerJobQueue, totalPiecesMap)
+}
+
+// connect_with_peer will asynchronously establish a TCP connection with 'peer'
+// and do two things:
+// - Send them a handshake message
+// - Listen for messages
+// Later, we'll need to figure out how to download the file itself
+go connect_with_peer(torrent_metainfo, peer, parent_done_chan) {
+  err_chan = make(error chan)
+  conn = establish_conn()
+  go send_peer_handshake(conn, torrent_metainfo, err_chan)
+  go listen_for_messages(conn, peer_id, err_chan)
+
+  for {
+    select {
+      err <- err_chan:
+      conn.tear_down()
+      // Tell parent we're done
+      parent_done_chan <- true
+      return
+      default:
+        sleep(1)
+    }
+  }
+}
+
+go listen_for_messages(conn, peer_id, errChan) {
+  buf := make([]byte, 1024)
+  peerJobQueue = []
+  for {
+    _, err := conn.Read(buf)
+    die through errChan if err
+    peerMsg, err = parse_peerMsg(buff)
+    die through errChan if err
+    go handleMsg(conn, peer_id, peerMsg, errChan)
+  }
+}
+
+connect_with_all_peers(metainfo, peers) error {
+  // XXX Logic in code already
+}
+
+run() {
+  torrent_file = read torrent file from flag
+  torrent_metainfo, err = parse_bencode(torrent_file)
+  die if err
+  peers, err = get_peers(torrent_metainfo)
+  die if err
+  err = connect_with_all_peers(torrent_metainfo, peers)
+  die if err
+}
+
+main {
+  die if run() fails
+}
+
+totalPieces []Piece
+
+type Piece struct {
+  pieceIdx int
+  pieceLength int
+  blocks []Block
+  path string
+}
+
+const (
+  BLOCKSTATUS_STILL = iota
+  BLOCKSTATUS_DOWNLOADING = iota
+  BLOCKSTATUS_DONE = iota
+)
+
+type Block struct {
+  blockOffset int
+  pieceIdx int
+  downloaderPeerId []byte
+  status int
+  path string
+}
+
+Best case scenario is the following:
+* Handshake with peers
+* fill the totalPieces with pieces and blocks
+  * So, if we have a torrent with 10 pieces, we'll fill the totalPieces with 10 pieces
+  * totalPieces is shared across all peers
+* For each peer...
+  * Receive HAVE request
+    * ASSUMPTION: We'll run the assumption that each peer MUST download ALL blocks for the piece it's working with
+    * When received, mark the pieceStatus in totalPieces[pieceIdx] as occupied
+      * We might receive multiple HAVE requests: work with the first one always
+  * fire a REQUEST to download the block upon receiving the first HAVE request
+    * and start a misfire timer
+      * we'll use the "share memory by communicating, not communicate by sharing memory" principle
+  * if we receive nothing, declare this to be a misfire
+    * remove the DOWNLOADING state for that block
+    * request another block (from the list of pieces this peer has)
+  * if we receive a PIECE request
+    * shutoff the misfire timer
+    * put the DONE state for that block
+    * request another block (from the list of pieces this peer has)
+* In this way, we can get a LOT of HAVE requests
+* and we'll download only once per peer to keep the peer active
+* and each time we download, we'll keep count if we failed to download or not
+* There's still a possibility that one peer might drop many blocks, in which case the others can fill in.
+  * It would be wise to start a timer to "jumpstart" an idle peer
+  * we'll need to identify an idle peer firs(from the list of pieces this peer has)t

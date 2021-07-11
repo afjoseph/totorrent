@@ -1,0 +1,32 @@
+// *42b051_21_06_01_Tue_16_35*
+// ---------------------------
+In essence, a peer:
+* holds some data
+* Can listen over a socket
+* Can dial through a socket
+
+Things we want from a testpeer:
+* a callback func when we connect to another peer
+* a callback func when we receive a peermsg
+
+changes to existing peer:
+* add the callbacks
+* add if we need to listen in the constructor
+
+peer
+* go self.ConnectWithPeer()
+  * peerConn := dialPeer()
+  * peerConn.ListenForMessages()
+    for true {
+      * peermsg, err := ReadWholePeerMsg
+      * Handle err
+      * call peerMsgHandler(peermsg)
+    }
+* go self.ListenForPeers()
+  * peerConn := acceptConn()
+  * peerConn.ListenForMessages()
+    for true {
+      * peermsg, err := ReadWholePeerMsg
+      * Handle err
+      * call peerMsgHandler(peermsg)
+    }

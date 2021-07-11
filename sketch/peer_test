@@ -1,0 +1,157 @@
+// *93a05c_21_06_01_Tue_16_35* 
+// ---------------------------
+
+Test_ConnectWithAllPeers_Download {
+  // Preparation
+  // - init FileInfo
+  expectedFileInfo := NewFileInfo{
+    Pieces: {
+      Block: NewBlock{0x00, 0x11, 0x22},
+      Block: NewBlock{0x33, 0x44, 0x55},
+      Block: NewBlock{0x66, 0x77, 0x88},
+    },
+  }
+  // - init testPeers
+  testPeers := [
+    // XXX All peers should have all pieces
+    Peer{
+      IP: ...
+      Port: ...
+      ID: ...
+      peerMsgFunc: {
+        if receivedMsg.(Handshake)
+          peerConn.Write(NewHandshake())
+          for f in fileInfo.Pieces {
+            peerConn.Write(NewHaveMsg(f.PieceIdx))
+            time.Sleep(1)
+          }
+        elif receivedMsg.(Interested)
+          peerConn.Write(NewUnchoked())
+      }
+    }
+  ]
+  for each testPeers {
+    tp.ListenForPeers()
+    defer tp.Close()
+  }
+  // - init ClientPeer
+  clientPeer := NewClientPeer()
+
+  // Action
+  // - This is a BLOCKING call
+  err = clientPeer.ConnectWithAllPeers(
+  testPeers,
+  func(peer, err) {
+    require.Fail(err)
+  })
+  require.Noerror(err)
+
+  // Assertions
+  for each testPeers {
+    assertInboundMsg(from:clientPeer, to:tp, msgType:Handshake, count:1)
+    assertInboundMsg(from:clientPeer, to:tp, msgType:Unchoked, count:1)
+    assertInboundMsg(from:clientPeer, to:tp, msgType:Have, count:3)
+    assert that clientPeer.FileInfo is equal to expectedFileInfo without checking individual blocks
+    assert that file is downloaded in clientPeer.FileInfo.DownloadDirPath as expected in fileInfo
+  }
+}
+
+Test_ReadWholePeerMsg() {
+  // PReparation
+  expectedPeerMsgs := {
+  ...
+  }
+  testPeer := {
+    IP: ...
+    Port: ...
+    ID: ...
+    onConnect: {
+      for msg in expectedPeerMsgs {
+        send msg
+      }
+    }
+    peerMsgHandler: nil
+  }
+
+  actualPeerMsgs := {}
+  clientPeer := {
+    peerMsgHandler(peerMsg): {
+      actualPeerMsgs.append(peerMsg)
+    }
+  }
+
+  // Action
+  err = clientPeer.ConnectWithAllPeers(
+  []{testPeer},
+  func(errWithID) {
+    require.Fail(errWithId.err)
+  }
+  )
+  require.Noerror(err)
+
+  // Assertions
+  assert(actualPeerMsgs == expectedPeerMsgs)
+}
+
+Test_ConnectWithAllPeers_Handshake_Choked {
+  // Preparation
+  // - init testPeers
+  testPeers := [
+    Peer{
+      IP: ...
+      Port: ...
+      ID: ...
+      onConnect: nil,
+      peerMsgFunc: {
+        if receivedMsg.(Handshake)
+          peerConn.Write(NewHandshake())
+        elif receivedMsg.(Interested)
+          peerConn.Write(NewChoked())
+      }
+      sendHandshakeFunc: nil
+    }
+  ]
+  for each testPeers {
+    tp.ListenForPeers()
+    defer tp.Close()
+  }
+
+  // - init ClientPeer
+  clientPeer := NewClientPeer()
+
+  // Action
+  // - This is a BLOCKING call
+  err = clientPeer.ConnectWithAllPeers(
+  testPeers,
+  func(peer, err) {
+    require.Fail(err)
+  })
+  require.Noerror(err)
+
+  // Assertions
+  for each testPeers {
+    Assert if clientPeer send ONE Handshake response to clientPeer
+    Assert if clientPeer send ONE Choked response to clientPeer
+  }
+}
+
+process
+* clientPeer
+  * self.ConnectWithAllPeers()
+    * For each peer, call go self.connectWithPeer
+      * peerConn := dialPeer()
+      * sendHandshakeFunc()
+      * peerConn.ListenForMessages()
+        for true {
+          * peermsg, err := ReadWholePeerMsg
+          * Handle err
+          * call peerMsgHandler(peermsg)
+        }
+* go self.ListenForPeers()
+  * peerConn := acceptConn()
+  * peerConn.ListenForMessages()
+    for true {
+      * peermsg, err := ReadWholePeerMsg
+      * Handle err
+      * call peerMsgHandler(peermsg)
+    }
